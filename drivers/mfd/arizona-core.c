@@ -604,6 +604,9 @@ static int arizona_runtime_resume(struct device *dev)
 			gpio_set_value_cansleep(arizona->pdata.reset, 0);
 		break;
 	default:
+		if (arizona->pdata.reset && arizona->external_dcvdd) {
+			gpio_set_value_cansleep(arizona->pdata.reset, 0);
+		}
 		break;
 	};
 
@@ -682,6 +685,11 @@ static int arizona_runtime_resume(struct device *dev)
 		}
 		break;
 	default:
+		if (arizona->pdata.reset && arizona->external_dcvdd) {
+			gpio_set_value_cansleep(arizona->pdata.reset, 1);
+			msleep(1);
+		}
+
 		ret = arizona_wait_for_boot(arizona);
 		if (ret != 0) {
 			goto err;
