@@ -33,7 +33,7 @@
 #include "i2s-regs.h"
 #include "../codecs/wm5102.h"
 #include "../codecs/florida.h"
-#include "../codecs/wm8998.h"
+#include "../codecs/vegas.h"
 
 
 #if defined(CONFIG_SND_SOC_MAX98504A)
