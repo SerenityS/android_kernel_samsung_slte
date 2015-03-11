@@ -70,3 +70,5 @@ endif
 obj-$(CONFIG_DM_VERITY)		+= dmverity_query.o
 
 obj-y += dualwave/
+
+obj-$(CONFIG_UID_CPUTIME) += uid_cputime.o
