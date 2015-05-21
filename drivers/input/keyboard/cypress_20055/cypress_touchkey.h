@@ -117,6 +117,8 @@
 #define	TK_GLOVE_DWORK_TIME	300
 #endif
 
+#define TK_KEYPAD_ENABLE
+
 enum {
 	FW_NONE = 0,
 	FW_BUILT_IN,
@@ -194,6 +196,9 @@ struct touchkey_i2c {
 	struct pinctrl *pinctrl_i2c;
 	struct pinctrl_state *pin_state[4];
 	int support_multi_touch;
+#ifdef TK_KEYPAD_ENABLE
+	bool keypad_enable;
+#endif
 };
 
 extern struct class *sec_class;

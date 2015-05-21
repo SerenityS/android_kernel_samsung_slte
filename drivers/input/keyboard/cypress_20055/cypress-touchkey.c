@@ -1311,6 +1311,12 @@ static irqreturn_t touchkey_interrupt(int irq, void *dev_id)
 	int keycode_type = 0;
 	int pressed;
 
+#ifdef TK_KEYPAD_ENABLE
+	if (!tkey_i2c->keypad_enable) {
+		return IRQ_HANDLED;
+	}
+#endif
+
 	if (unlikely(!touchkey_probe)) {
 		dev_err(&tkey_i2c->client->dev, "%s: Touchkey is not probed\n", __func__);
 		return IRQ_HANDLED;
@@ -1899,6 +1905,35 @@ static ssize_t set_touchkey_firm_status_show(struct device *dev,
 	return count;
 }
 
+#ifdef TK_KEYPAD_ENABLE
+static ssize_t sec_keypad_enable_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct touchkey_i2c *tkey_i2c = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%d\n", tkey_i2c->keypad_enable ? 1 : 0);
+}
+
+static ssize_t sec_keypad_enable_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct touchkey_i2c *tkey_i2c = dev_get_drvdata(dev);
+	bool val;
+
+	if (sysfs_streq(buf, "0"))
+		val = false;
+	else if (sysfs_streq(buf, "1"))
+		val = true;
+	else
+		return -EINVAL;
+
+	tkey_i2c->keypad_enable = val;
+	//input_sync(tkey_i2c->input_dev);
+
+	return count;
+}
+#endif
+
 static DEVICE_ATTR(brightness, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
 		   touchkey_led_control);
 #ifdef TK_USE_RECENT
@@ -1958,6 +1993,10 @@ static DEVICE_ATTR(glove_mode, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
 static DEVICE_ATTR(flip_mode, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
 		   flip_cover_mode_enable);
 #endif
+#ifdef TK_KEYPAD_ENABLE
+static DEVICE_ATTR(keypad_enable, S_IRUGO | S_IWUSR | S_IWGRP,
+		   sec_keypad_enable_show, sec_keypad_enable_store);
+#endif
 
 static struct attribute *touchkey_attributes[] = {
 	&dev_attr_brightness.attr,
@@ -2002,6 +2041,9 @@ static struct attribute *touchkey_attributes[] = {
 #endif
 #ifdef TKEY_FLIP_MODE
 	&dev_attr_flip_mode.attr,
+#endif
+#ifdef TK_KEYPAD_ENABLE
+	&dev_attr_keypad_enable.attr,
 #endif
 	NULL,
 };
@@ -2403,6 +2445,9 @@ static int i2c_touchkey_probe(struct i2c_client *client,
 	}
 	tkey_i2c->enabled = true;
 	tkey_i2c->flip_status = 0;
+#ifdef TK_KEYPAD_ENABLE
+	tkey_i2c->keypad_enable = true;
+#endif
 
 	/*sysfs*/
 	tkey_i2c->dev = sec_device_create(tkey_i2c, "sec_touchkey");
