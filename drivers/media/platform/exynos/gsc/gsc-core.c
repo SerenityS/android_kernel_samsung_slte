@@ -1470,8 +1470,12 @@ static void gsc_parse_dt(struct device_node *np, struct gsc_dev *gsc)
 	of_property_read_u32(np, "mif_min", &pdata->mif_min);
 	of_property_read_u32(np, "int_min", &pdata->int_min);
 
-	if (gsc->id == 0)
-		of_property_read_u32(np, "int_min_otf",	&pdata->int_min_otf);
+	if (gsc->id == 0) {
+		of_property_read_u32(np, "int_min_otf",
+				&pdata->int_min_otf);
+		of_property_read_u32(np, "mif_min_otf_rot",
+				&pdata->mif_min_otf_rot);
+	}
 }
 #else
 static void gsc_parse_dt(struct device_node *np, struct gsc_dev *gsc)

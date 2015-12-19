@@ -25,11 +25,6 @@
 
 #define TEST_MODE_TIME 10000
 
-/* duty in percent */
-static unsigned long pwm_val = 50;
-/* duty value, 37050=100%, 27787=50%, 18525=0% */
-static int pwm_duty = 27787;
-
 struct max77804_haptic_data {
 	struct max77804_dev *max77804;
 	struct i2c_client *i2c;
@@ -46,10 +41,10 @@ struct max77804_haptic_data {
 	struct work_struct work;
 	spinlock_t lock;
 	bool running;
-	bool resumed;
 };
 
 struct max77804_haptic_data *g_hap_data;
+static int prev_duty;
 
 static void max77804_haptic_i2c(struct max77804_haptic_data *hap_data, bool en)
 {
@@ -179,10 +174,8 @@ static void haptic_work(struct work_struct *work)
 
 		max77804_haptic_i2c(hap_data, true);
 
-		pwm_config(hap_data->pwm, pwm_duty,
+		pwm_config(hap_data->pwm, hap_data->pdata->duty,
 			   hap_data->pdata->period);
-		pr_debug("[VIB] %s: pwm_config duty=%d\n", __func__, pwm_duty);
-
 		pwm_enable(hap_data->pwm);
 		if (hap_data->pdata->motor_en)
 			hap_data->pdata->motor_en(true);
@@ -221,13 +214,7 @@ void vibtonz_en(bool en)
 
 		max77804_haptic_i2c(g_hap_data, true);
 
-		//must set pwm after resume. this may be workaround..
-		if(g_hap_data->resumed)
-		{
-			pwm_config(g_hap_data->pwm, g_hap_data->pdata->period/2, g_hap_data->pdata->period);
-			g_hap_data->resumed = false;
-		}
-
+		pwm_config(g_hap_data->pwm, prev_duty, g_hap_data->pdata->period);
 		pwm_enable(g_hap_data->pwm);
 		if (g_hap_data->pdata->motor_en)
 			g_hap_data->pdata->motor_en(true);
@@ -252,20 +239,24 @@ EXPORT_SYMBOL(vibtonz_en);
 
 void vibtonz_pwm(int nForce)
 {
-	/* add to avoid the glitch issue */
-	static int prev_duty;
-	int pwm_period = 0;
+	int pwm_period = 0, pwm_duty = 0;
 
 	if (g_hap_data == NULL) {
-		pr_err("[VIB] %s: the motor is not ready!!!", __func__);
+		printk(KERN_ERR "[VIB] the motor is not ready!!!");
 		return ;
 	}
+
+	pwm_period = g_hap_data->pdata->period;
+	pwm_duty = pwm_period / 2 + ((pwm_period / 2 - 2) * nForce) / 127;
+
+	if (pwm_duty > g_hap_data->pdata->duty)
+		pwm_duty = g_hap_data->pdata->duty;
+	else if (pwm_period - pwm_duty > g_hap_data->pdata->duty)
+		pwm_duty = pwm_period - g_hap_data->pdata->duty;
 
 	/* add to avoid the glitch issue */
 	if (prev_duty != pwm_duty) {
 		prev_duty = pwm_duty;
-
-		pr_debug("[VIB] %s: setting pwm_duty=%d", __func__, pwm_duty);
 		pwm_config(g_hap_data->pwm, pwm_duty, pwm_period);
 	}
 }
@@ -319,49 +310,6 @@ static int of_max77804_haptic_dt(struct max77804_haptic_platform_data *pdata)
 	return 0;
 }
 #endif /* CONFIG_OF */
-
-static ssize_t pwm_value_show(struct device *dev,
-			      struct device_attribute *attr,
-			      char *buf)
-{
-	int count;
-
-	pwm_val = ((pwm_duty - 18525) * 100) / 18525;
-
-	count = sprintf(buf, "%lu\n", pwm_val);
-	pr_debug("[VIB] pwm_val: %lu\n", pwm_val);
-
-	return count;
-}
-
-ssize_t pwm_value_store(struct device *dev,
-			struct device_attribute *attr,
-			const char *buf, size_t size)
-{
-	if (kstrtoul(buf, 0, &pwm_val)) {
-		pr_err("[VIB] %s: error on storing pwm_val\n", __func__);
-	}
-
-	pr_info("[VIB] %s: pwm_val=%lu\n", __func__, pwm_val);
-
-	pwm_duty = (pwm_val * 18525) / 100 + 18525;
-
-	/* make sure new pwm duty is in range */
-	if (pwm_duty > 37050) {
-		pwm_duty = 37050;
-	} else if (pwm_duty < 18525) {
-		pwm_duty = 18525;
-	}
-
-	pr_info("[VIB] %s: pwm_duty=%d\n", __func__, pwm_duty);
-
-	return size;
-}
-
-static DEVICE_ATTR(pwm_value,
-		   S_IRUGO | S_IWUSR,
-		   pwm_value_show,
-		   pwm_value_store);
 
 static int max77804_haptic_probe(struct platform_device *pdev)
 {
@@ -421,6 +369,7 @@ static int max77804_haptic_probe(struct platform_device *pdev)
 	}
 
 	pwm_config(hap_data->pwm, hap_data->pdata->period / 2, hap_data->pdata->period);
+	prev_duty = hap_data->pdata->period / 2;
 
 	vibetonz_clk_on(&pdev->dev, true);
 	if (hap_data->pdata->init_hw)
@@ -443,20 +392,12 @@ static int max77804_haptic_probe(struct platform_device *pdev)
 	hap_data->tout_dev.get_time = haptic_get_time;
 	hap_data->tout_dev.enable = haptic_enable;
 
-	hap_data->resumed = false;
-
 #ifdef CONFIG_ANDROID_TIMED_OUTPUT
 	error = timed_output_dev_register(&hap_data->tout_dev);
 	if (error < 0) {
 		pr_err("[VIB] Failed to register timed_output : %d\n", error);
 		error = -EFAULT;
 		goto err_timed_output_register;
-	}
-
-	/* User controllable pwm level */
-	error = device_create_file(hap_data->tout_dev.dev, &dev_attr_pwm_value);
-	if (error > 0) {
-		pr_err("[VIB] create sysfs fail: pwm_value\n");
 	}
 #endif
 
@@ -507,7 +448,6 @@ static int max77804_haptic_resume(struct platform_device *pdev)
 {
 	pr_info("[VIB] %s\n", __func__);
 	vibetonz_clk_on(&pdev->dev, true);
-	g_hap_data->resumed = true;
 	return 0;
 }
 

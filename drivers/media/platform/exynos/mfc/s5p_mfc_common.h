@@ -521,7 +521,7 @@ struct s5p_mfc_enc_params {
 	u16 width;
 	u16 height;
 
-	u16 gop_size;
+	u32 gop_size;
 	enum v4l2_mpeg_video_multi_slice_mode slice_mode;
 	u16 slice_mb;
 	u32 slice_bit;
@@ -1014,7 +1014,8 @@ static inline unsigned int mfc_version(struct s5p_mfc_dev *dev)
 #else	/* Do not use last frame info */
 #define FW_HAS_LAST_DISP_INFO(dev)	0
 #endif
-
+#define FW_HAS_GOP2(dev)		(IS_MFCv8X(dev) &&			\
+					(dev->fw.date >= 0x150320))
 #define HW_LOCK_CLEAR_MASK		(0xFFFFFFFF)
 
 #define is_h264(ctx)		((ctx->codec_mode == S5P_FIMV_CODEC_H264_DEC) ||\

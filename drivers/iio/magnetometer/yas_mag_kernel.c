@@ -52,6 +52,7 @@
 #endif
 
 static struct i2c_client *this_client;
+static s64 old_ts;
 
 enum {
 	YAS_SCAN_MAGN_X,
@@ -78,6 +79,8 @@ struct yas_state {
 
 static int yas_device_open(int32_t type)
 {
+	// mag_drv always calls device_open during mag enable, so set old_ts here
+	old_ts = 0LL;
 	return 0;
 }
 
@@ -184,10 +187,17 @@ static irqreturn_t yas_trigger_handler(int irq, void *p)
 	int32_t *mag;
 	struct timespec ts;
 	s64 timestamp;
+	s64 delay;
+	s64 ts_shift;
+	s64 new_ts;
 
 	mag = (int32_t *) kmalloc(indio_dev->scan_bytes, GFP_KERNEL);
 	if (mag == NULL)
 		goto done;
+
+	delay = NSEC_PER_SEC / st->sampling_frequency;
+	ts_shift = delay >> 1;
+
 	if (!bitmap_empty(indio_dev->active_scan_mask, indio_dev->masklength)) {
 		j = 0;
 		for (i = 0; i < 3; i++) {
@@ -205,11 +215,24 @@ static irqreturn_t yas_trigger_handler(int irq, void *p)
 
 	ts = ktime_to_timespec(ktime_get_boottime());
 	timestamp = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
-	*(s64 *)((u8 *)mag + ALIGN(len, sizeof(s64))) = timestamp;
-	if (timestamp <= 0)
-		pr_err("[%s] invalid time = %lld\n", __func__, timestamp);
 
+	// Limit looping to 100 iterations in case time difference is huge
+	if (old_ts && (timestamp - old_ts) > delay * 100) {
+		old_ts = timestamp;
+	}
+
+	if (old_ts != 0 && ((timestamp - old_ts) * 10 > delay * 18)) {
+		for (new_ts = old_ts + delay; new_ts < timestamp - ts_shift; new_ts += delay) {
+			*(s64 *)((u8 *)mag + ALIGN(len, sizeof(s64))) = new_ts;
+			iio_push_to_buffers(indio_dev, (u8 *)mag);
+			old_ts = new_ts;
+		}
+	}
+
+	*(s64 *)((u8 *)mag + ALIGN(len, sizeof(s64))) = timestamp;
 	iio_push_to_buffers(indio_dev, (u8 *)mag);
+	old_ts = timestamp;
+
 	kfree(mag);
 done:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -362,8 +385,10 @@ static ssize_t yas_sampling_frequency_store(struct device *dev,
 	ret = kstrtoint(buf, 10, &data);
 	if (ret)
 		return ret;
-	if (data <= 0)
-		return -EINVAL;
+	if (data > 100)
+		data = 100;
+	else if (data < 5)
+		data = 5;
 	mutex_lock(&st->lock);
 	st->sampling_frequency = data;
 #if YAS_MAG_DRIVER == YAS_MAG_DRIVER_YAS537

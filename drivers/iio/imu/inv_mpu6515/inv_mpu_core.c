@@ -70,6 +70,14 @@ s64 get_time_ns(void)
 	return timestamp;
 }
 
+void check_fifo_rate(int *fifo_rate)
+{
+	if (*fifo_rate > MAX_FIFO_RATE)
+		*fifo_rate = MAX_FIFO_RATE;
+	else if (*fifo_rate < MIN_FIFO_RATE)
+		*fifo_rate = MIN_FIFO_RATE;
+}
+
 s64 get_time_timeofday(void)
 {
 	struct timeval tv;
@@ -245,8 +253,7 @@ static int accel_open_calibration(struct inv_mpu_state *st)
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
 
-	cal_filp = filp_open(MPU6500_ACCEL_CAL_PATH,
-		O_RDONLY, S_IRUGO | S_IWUSR | S_IWGRP);
+	cal_filp = filp_open(MPU6500_ACCEL_CAL_PATH, O_RDONLY, 0);
 	if (IS_ERR(cal_filp)) {
 		pr_err("%s: Can't open calibration file\n", __func__);
 		set_fs(old_fs);
@@ -281,8 +288,7 @@ static int gyro_open_calibration(struct inv_mpu_state *st)
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
 
-	cal_filp = filp_open(MPU6500_GYRO_CAL_PATH,
-		O_RDONLY, S_IRUGO | S_IWUSR | S_IWGRP);
+	cal_filp = filp_open(MPU6500_GYRO_CAL_PATH, O_RDONLY, 0);
 	if (IS_ERR(cal_filp)) {
 		pr_err("[SENSOR] %s: - Can't open calibration file\n", __func__);
 		set_fs(old_fs);
@@ -325,8 +331,7 @@ static int gyro_do_calibrate(struct inv_mpu_state *st)
 	set_fs(KERNEL_DS);
 
 	cal_filp = filp_open(MPU6500_GYRO_CAL_PATH,
-			O_CREAT | O_TRUNC | O_WRONLY,
-			S_IRUGO | S_IWUSR | S_IWGRP);
+			O_CREAT | O_TRUNC | O_WRONLY, 0660);
 	if (IS_ERR(cal_filp)) {
 		pr_err("[SENSOR] %s: - Can't open calibration file\n", __func__);
 		set_fs(old_fs);
@@ -691,8 +696,6 @@ int inv_reset_offset_reg(struct inv_mpu_state *st, bool en)
  */
 static int inv_fifo_rate_store(struct inv_mpu_state *st, int fifo_rate)
 {
-	if ((fifo_rate < MIN_FIFO_RATE) || (fifo_rate > MAX_FIFO_RATE))
-		return -EINVAL;
 	if (fifo_rate == st->chip_config.fifo_rate)
 		return 0;
 
@@ -866,8 +869,10 @@ static ssize_t _dmp_attr_store(struct device *dev,
 		st->chip_config.step_indicator_on = !!data;
 		break;
 	case ATTR_DMP_BATCHMODE_TIMEOUT:
-		if (data < 0 || data > INT_MAX)
-			return -EINVAL;
+		if (data > INT_MAX)
+			data = INT_MAX;
+		else if (data < 0)
+			data = 0;
 		st->batch.timeout = data;
 		break;
 	case ATTR_DMP_BATCHMODE_WAKE_FIFO_FULL:
@@ -876,26 +881,27 @@ static ssize_t _dmp_attr_store(struct device *dev,
 		break;
 	case ATTR_DMP_SIX_Q_ON:
 		st->sensor[SENSOR_SIXQ].on = !!data;
+		st->sensor[SENSOR_SIXQ].old_ts = 0ULL;
 		break;
 	case ATTR_DMP_SIX_Q_RATE:
-		if (data > MPU_DEFAULT_DMP_FREQ || data < 0)
-			return -EINVAL;
+		check_fifo_rate(&data);
 		st->sensor[SENSOR_SIXQ].rate = data;
 		st->sensor[SENSOR_SIXQ].dur = MPU_DEFAULT_DMP_FREQ / data;
 		st->sensor[SENSOR_SIXQ].dur *= DMP_INTERVAL_INIT;
 		break;
 	case ATTR_DMP_LPQ_ON:
 		st->sensor[SENSOR_LPQ].on = !!data;
+		st->sensor[SENSOR_LPQ].old_ts = 0ULL;
 		break;
 	case ATTR_DMP_LPQ_RATE:
-		if (data > MPU_DEFAULT_DMP_FREQ || data < 0)
-			return -EINVAL;
+		check_fifo_rate(&data);
 		st->sensor[SENSOR_LPQ].rate = data;
 		st->sensor[SENSOR_LPQ].dur = MPU_DEFAULT_DMP_FREQ / data;
 		st->sensor[SENSOR_LPQ].dur *= DMP_INTERVAL_INIT;
 		break;
 	case ATTR_DMP_PED_Q_ON:
 		st->sensor[SENSOR_PEDQ].on = !!data;
+		st->sensor[SENSOR_PEDQ].old_ts = 0ULL;
 		break;
 	case ATTR_DMP_PED_Q_RATE:
 		if (data > MPU_DEFAULT_DMP_FREQ || data < 0)
@@ -906,6 +912,7 @@ static ssize_t _dmp_attr_store(struct device *dev,
 		break;
 	case ATTR_DMP_STEP_DETECTOR_ON:
 		st->sensor[SENSOR_STEP].on = !!data;
+		st->sensor[SENSOR_STEP].old_ts = 0ULL;
 		break;
 	default:
 		return -EINVAL;
@@ -1060,7 +1067,9 @@ static ssize_t _dmp_mem_store(struct device *dev,
 			// Sending dummy data to begin polling at HAL
 			hdr = STEP_COUNTER_HDR;
 			memcpy(sc_buf, &hdr, sizeof(hdr));
+			mutex_lock(&st->iio_buf_write_lock);
 			iio_push_to_buffers(indio_dev, sc_buf);
+			mutex_unlock(&st->iio_buf_write_lock);
 			pr_info("step counter dummy data sent\n");
 		} else
 			st->shealth.interrupt_mask = 0;
@@ -2168,6 +2177,7 @@ static ssize_t _attr_store(struct device *dev,
 		st->self_test.threshold = data;
 	case ATTR_GYRO_ENABLE:
 		st->chip_config.gyro_enable = !!data;
+		st->sensor[SENSOR_GYRO].old_ts = 0ULL;
 		if (st->chip_config.gyro_enable)
 			gyro_open_calibration(st);
 		break;
@@ -2175,12 +2185,14 @@ static ssize_t _attr_store(struct device *dev,
 		st->sensor[SENSOR_GYRO].on = !!data;
 		break;
 	case ATTR_GYRO_RATE:
+		check_fifo_rate(&data);
 		st->sensor[SENSOR_GYRO].rate = data;
 		st->sensor[SENSOR_GYRO].dur  = MPU_DEFAULT_DMP_FREQ / data;
 		st->sensor[SENSOR_GYRO].dur  *= DMP_INTERVAL_INIT;
 		break;
 	case ATTR_ACCEL_ENABLE:
 		st->chip_config.accel_enable = !!data;
+		st->sensor[SENSOR_ACCEL].old_ts = 0ULL;
 		if (st->chip_config.accel_enable)
 			accel_open_calibration(st);
 		break;
@@ -2188,6 +2200,7 @@ static ssize_t _attr_store(struct device *dev,
 		st->sensor[SENSOR_ACCEL].on = !!data;
 		break;
 	case ATTR_ACCEL_RATE:
+		check_fifo_rate(&data);
 		st->sensor[SENSOR_ACCEL].rate = data;
 		st->sensor[SENSOR_ACCEL].dur  = MPU_DEFAULT_DMP_FREQ / data;
 		st->sensor[SENSOR_ACCEL].dur  *= DMP_INTERVAL_INIT;
@@ -2229,6 +2242,7 @@ static ssize_t _attr_store(struct device *dev,
 		result = inv_firmware_loaded(st, data);
 		break;
 	case ATTR_SAMPLING_FREQ:
+		check_fifo_rate(&data);
 		result = inv_fifo_rate_store(st, data);
 		break;
 #ifdef CONFIG_INV_TESTING
@@ -3177,8 +3191,7 @@ static int accel_do_calibrate(struct inv_mpu_state *st, int enable)
 	set_fs(KERNEL_DS);
 
 	cal_filp = filp_open(MPU6500_ACCEL_CAL_PATH,
-			O_CREAT | O_TRUNC | O_WRONLY,
-			S_IRUGO | S_IWUSR | S_IWGRP);
+			O_CREAT | O_TRUNC | O_WRONLY, 0660);
 	if (IS_ERR(cal_filp)) {
 		pr_err("%s: Can't open calibration file\n", __func__);
 		set_fs(old_fs);
@@ -4056,6 +4069,7 @@ static int inv_mpu_probe(struct i2c_client *client,
 	INIT_KFIFO(st->timestamps);
 	spin_lock_init(&st->time_stamp_lock);
 	mutex_init(&st->suspend_resume_lock);
+	mutex_init(&st->iio_buf_write_lock);
 	wake_lock_init(&st->shealth.wake_lock, WAKE_LOCK_SUSPEND, "inv_iio");
 
 	result = st->set_power_state(st, false);
@@ -4103,6 +4117,7 @@ err_gyro_sensor_register_failed:
 #endif
 
 out_remove_dmp_sysfs:
+	mutex_destroy(&st->iio_buf_write_lock);
 	mutex_destroy(&st->suspend_resume_lock);
 	kfifo_free(&st->timestamps);
 out_unreg_iio:

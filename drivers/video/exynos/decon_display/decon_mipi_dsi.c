@@ -170,7 +170,7 @@ int s5p_mipi_dsi_wr_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 		INIT_COMPLETION(dsim_ph_wr_comp);
 		dsim_reg_clear_int(DSIM_INTSRC_SFR_PH_FIFO_EMPTY);
 		dsim_reg_wr_tx_header(data_id, data0, data1);
-		if (!wait_for_completion_interruptible_timeout(&dsim_ph_wr_comp,
+		if (!wait_for_completion_timeout(&dsim_ph_wr_comp,
 			wr_timeout)) {
 				dev_err(dsim->dev, "MIPI DSIM short packet write Timeout! %02X\n", data0);
 				ret = -ETIMEDOUT;
@@ -186,7 +186,7 @@ int s5p_mipi_dsi_wr_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 		INIT_COMPLETION(dsim_ph_wr_comp);
 		dsim_reg_clear_int(DSIM_INTSRC_SFR_PH_FIFO_EMPTY);
 		dsim_reg_wr_tx_header(data_id, data0, data1);
-		if (!wait_for_completion_interruptible_timeout(&dsim_ph_wr_comp,
+		if (!wait_for_completion_timeout(&dsim_ph_wr_comp,
 			wr_timeout)) {
 				dev_err(dsim->dev, "MIPI DSIM short packet write Timeout! %02X\n", data0);
 				ret = -ETIMEDOUT;
@@ -210,7 +210,7 @@ int s5p_mipi_dsi_wr_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 		INIT_COMPLETION(dsim_ph_wr_comp);
 		dsim_reg_clear_int_all();
 		dsim_reg_wr_tx_header(data_id, data0, data1);
-		if (!wait_for_completion_interruptible_timeout(&dsim_ph_wr_comp,
+		if (!wait_for_completion_timeout(&dsim_ph_wr_comp,
 			wr_timeout)) {
 				dev_err(dsim->dev, "MIPI DSIM short packet write Timeout! %02X\n", data0);
 				ret = -ETIMEDOUT;
@@ -251,7 +251,7 @@ int s5p_mipi_dsi_wr_data(struct mipi_dsim_device *dsim, unsigned int data_id,
 
 		/* put data into header fifo */
 		dsim_reg_wr_tx_header(data_id, data1 & 0xff, (data1 & 0xff00) >> 8);
-		if (!wait_for_completion_interruptible_timeout(&dsim_wr_comp,
+		if (!wait_for_completion_timeout(&dsim_wr_comp,
 			wr_timeout)) {
 				dev_err(dsim->dev, "MIPI DSIM write Timeout! %02X\n", *(u8 *)(data0));
 				ret = -ETIMEDOUT;
@@ -356,7 +356,7 @@ int s5p_mipi_dsi_rd_data(struct mipi_dsim_device *dsim, u32 data_id,
 
 	/* Read request */
 	s5p_mipi_dsi_wr_data(dsim, data_id, addr, 0);
-	if (!wait_for_completion_interruptible_timeout(&dsim_rd_comp,
+	if (!wait_for_completion_timeout(&dsim_rd_comp,
 		rd_timeout)) {
 		dev_err(dsim->dev, "MIPI DSIM read Timeout!\n");
 		return -ETIMEDOUT;
@@ -1136,7 +1136,7 @@ int create_mipi_dsi_controller(struct platform_device *pdev)
 
 	GET_DISPDRV_OPS(dispdrv).enable_display_driver_power(&pdev->dev);
 
-	dsim_reg_set_hs_clock(1);
+	/* dsim_reg_set_hs_clock(1); */
 
 	dsim->state = DSIM_STATE_HSCLKEN;
 

@@ -44,11 +44,11 @@ struct isa1000a_vibrator_data {
 	struct work_struct work;
 	spinlock_t lock;
 	bool running;
-	bool resumed;
 };
 
 static struct device *motor_dev;
 struct isa1000a_vibrator_data *g_hap_data;
+static int prev_duty;
 
 static int haptic_get_time(struct timed_output_dev *tout_dev)
 {
@@ -182,13 +182,7 @@ void vibtonz_en(bool en)
 		if (g_hap_data->running)
 			return;
 
-		//must set pwm after resume. this may be workaround..
-		if(g_hap_data->resumed)
-		{
-			pwm_config(g_hap_data->pwm, g_hap_data->pdata->period/2, g_hap_data->pdata->period);
-			g_hap_data->resumed = false;
-		}
-
+		pwm_config(g_hap_data->pwm, prev_duty, g_hap_data->pdata->period);
 		pwm_enable(g_hap_data->pwm);
 		ret = regulator_enable(g_hap_data->regulator);
 		if (ret)
@@ -211,8 +205,6 @@ EXPORT_SYMBOL(vibtonz_en);
 
 void vibtonz_pwm(int nForce)
 {
-	/* add to avoid the glitch issue */
-	static int prev_duty;
 	int pwm_period = 0, pwm_duty = 0;
 
 	if (g_hap_data == NULL) {
@@ -443,6 +435,7 @@ static int isa1000a_vibrator_probe(struct platform_device *pdev)
 	}
 
 	pwm_config(hap_data->pwm, hap_data->pdata->period / 2, hap_data->pdata->period);
+	prev_duty = hap_data->pdata->period / 2;
 
 	vibetonz_clk_on(&pdev->dev, true);
 
@@ -462,8 +455,6 @@ static int isa1000a_vibrator_probe(struct platform_device *pdev)
 	hap_data->tout_dev.name = "vibrator";
 	hap_data->tout_dev.get_time = haptic_get_time;
 	hap_data->tout_dev.enable = haptic_enable;
-
-	hap_data->resumed = false;
 
 	motor_dev = sec_device_create(hap_data, "motor");
 	if (IS_ERR(motor_dev)) {
@@ -542,7 +533,6 @@ static int isa1000a_vibrator_resume(struct platform_device *pdev)
 {
 	pr_info("[VIB] %s\n", __func__);
 	vibetonz_clk_on(&pdev->dev, true);
-	g_hap_data->resumed = true;
 	return 0;
 }
 

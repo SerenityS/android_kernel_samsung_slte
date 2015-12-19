@@ -1344,6 +1344,8 @@ static irqreturn_t s3c_fb_irq(int irq, void *dev_id)
 		s3c_fb_log_fifo_underflow_locked(sfb, timestamp);
 	}
 	if (irq_sts_reg & VIDINTCON1_INT_I80) {
+		sfb->frame_done_cnt_cur++;
+		wake_up_interruptible_all(&sfb->wait_frmdone);
 		writel(VIDINTCON1_INT_I80, regs + VIDINTCON1);
 	}
 	spin_unlock(&sfb->slock);
@@ -2676,6 +2678,18 @@ static void decon_set_win_update_full(struct s3c_fb *sfb)
 }
 #endif
 
+static void decon_wait_for_framedone(struct s3c_fb *sfb)
+{
+	int ret;
+	s64 time_ms = ktime_to_ms(ktime_get()) - ktime_to_ms(sfb->trig_mask_timestamp);
+
+	if (time_ms < MAX_FRM_DONE_WAIT) {
+		ret = wait_event_interruptible_timeout(sfb->wait_frmdone,
+			(sfb->frame_done_cnt_target <= sfb->frame_done_cnt_cur),
+			msecs_to_jiffies(MAX_FRM_DONE_WAIT - time_ms));
+	}
+}
+
 static void decon_reg_set_win_update_config(struct s3c_fb *sfb, struct s3c_reg_data *regs)
 {
 	int dsim_mpkt;
@@ -2685,6 +2699,7 @@ static void decon_reg_set_win_update_config(struct s3c_fb *sfb, struct s3c_reg_d
 
 	if (regs->need_update) {
 		/* TODO: Do we need to wait until the MIPI frame done */
+		decon_wait_for_framedone(sfb);
 		decon_reg_wait_linecnt_is_zero_timeout(35 * 1000);
 
 		dsim_mpkt = dsim_reg_get_pkt_go_status();
@@ -3014,10 +3029,13 @@ static void s3c_fb_update_regs(struct s3c_fb *sfb, struct s3c_reg_data *regs)
 	s3c_fb_wait_for_frame_intr(sfb, 50);
 	count = 9000;
 	decon_reg_wait_for_update_timeout(count * 100);
+	decon_write(VIDINTCON1, VIDINTCON1_INT_I80);
+	sfb->frame_done_cnt_target = sfb->frame_done_cnt_cur + 1;
 
 	if (sfb->trig_mode == DECON_HW_TRIG)
 		decon_reg_set_trigger(sfb->trig_mode, DECON_TRIG_DISABLE);
 
+	sfb->trig_mask_timestamp = ktime_get();
 	for (i = 0; i < sfb->variant.nr_windows; i++)
 		s3c_fb_free_dma_buf(sfb, &old_dma_bufs[i]);
 
@@ -4512,7 +4530,7 @@ int create_decon_display_controller(struct platform_device *pdev)
 		goto resource_exception;
 	}
 
-#if defined(CONFIG_FB_I80_COMMAND_MODE) && !defined(CONFIG_FB_I80_HW_TRIGGER)
+#if defined(CONFIG_FB_I80_COMMAND_MODE)
 	ret = devm_request_irq(dev, dispdrv->decon_driver.i80_irq_no,
 		s3c_fb_irq, 0, "s3c_fb", sfb);
 	if (ret) {
@@ -4566,6 +4584,7 @@ int create_decon_display_controller(struct platform_device *pdev)
 #endif
 
 	init_waitqueue_head(&sfb->wait_frmint);
+	init_waitqueue_head(&sfb->wait_frmdone);
 	/* we have the register setup, start allocating framebuffers */
 	for (i = 0; i < fbdrv->variant.nr_windows; i++) {
 		win = i;

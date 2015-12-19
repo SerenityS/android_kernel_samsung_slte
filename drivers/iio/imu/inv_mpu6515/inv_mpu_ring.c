@@ -39,6 +39,101 @@
 
 static u8 fifo_data[HARDWARE_FIFO_SIZE + HEADERED_Q_BYTES];
 static int inv_process_batchmode(struct inv_mpu_state *st);
+static u64 check_timestamp(struct inv_mpu_state *st, u16 hdr, u8 *buf_data1, u8 *buf_data2, u64 t);
+static int inv_parse_header(u16 hdr);
+static void get_sample_count_per_sensor(struct inv_mpu_state *st, u8 *dptr, u8 *d, int target_bytes);
+
+static void get_sample_count_per_sensor(struct inv_mpu_state *st, u8 *dptr, u8 *d, int target_bytes)
+{
+	u16 hdr;
+	int sensor_ind;
+
+	st->sensor[SENSOR_GYRO].sample_count = st->sensor[SENSOR_GYRO].batch_irq_time = 0;
+	st->sensor[SENSOR_ACCEL].sample_count = st->sensor[SENSOR_ACCEL].batch_irq_time = 0;
+	st->sensor[SENSOR_PRESSURE].sample_count = st->sensor[SENSOR_PRESSURE].batch_irq_time = 0;
+	st->sensor[SENSOR_SIXQ].sample_count = st->sensor[SENSOR_SIXQ].batch_irq_time = 0;
+	st->sensor[SENSOR_LPQ].sample_count = st->sensor[SENSOR_LPQ].batch_irq_time = 0;
+
+	while ((dptr - d) <= (target_bytes - HEADERED_NORMAL_BYTES)) {
+
+		hdr = (u16)be16_to_cpup((__be16 *)(dptr));
+		hdr &= (~STEP_INDICATOR_MASK);
+		sensor_ind = inv_parse_header(hdr);
+
+		if (sensor_ind == SENSOR_INVALID) {
+			dptr += (HEADERED_NORMAL_BYTES / 4);
+			pr_err("sensor_ind == SENSOR_INVALID\n");
+			continue;
+		}
+
+		switch (sensor_ind)
+		{
+			case SENSOR_GYRO:
+				st->sensor[SENSOR_GYRO].sample_count++;
+				break;
+			case SENSOR_ACCEL:
+				st->sensor[SENSOR_ACCEL].sample_count++;
+				break;
+			case SENSOR_PRESSURE:
+				st->sensor[SENSOR_PRESSURE].sample_count++;
+				break;
+			case SENSOR_SIXQ:
+				st->sensor[SENSOR_SIXQ].sample_count++;
+				break;
+			case SENSOR_LPQ:
+				st->sensor[SENSOR_LPQ].sample_count++;
+				break;
+			case SENSOR_STEP:
+				st->sensor[SENSOR_STEP].sample_count++;
+				break;
+			default:
+				pr_err("sensor_ind not found\n");
+		}
+
+		dptr += st->sensor[sensor_ind].sample_size;
+	}
+}
+
+static u64 check_timestamp(struct inv_mpu_state *st, u16 hdr, u8 *buf_data1, u8 *buf_data2, u64 t)
+{
+	struct iio_dev *indio_dev = iio_priv_to_dev(st);
+	u8 buf_ts[IIO_BUFFER_BYTES];
+	int ind = inv_parse_header(hdr);
+	u64 t_new = 0;
+	u64 t_old = st->sensor[ind].old_ts;
+	u64 delay_ns = NSEC_PER_SEC / st->sensor[ind].rate;
+	u64 shift_t = delay_ns >> 1;;
+
+	if (ind == SENSOR_STEP)
+		return t;
+
+	if ((s64)t < (s64)t_old) {
+		t = t_old + delay_ns;
+		return t;
+	}
+
+	// Limit looping to 100 iterations in case time difference is huge
+	if (t_old && (t - t_old) > delay_ns * 100) {
+		// Get time again, in case current t is incorrect
+		return get_time_ns();
+	}
+
+	if (t_old && (t - t_old) * 10 > delay_ns * 18) {
+		for (t_new = t_old + delay_ns; t_new < t - shift_t; t_new += delay_ns) {
+			memcpy(buf_ts, &t_new, sizeof(t_new));
+			mutex_lock(&st->iio_buf_write_lock);
+			iio_push_to_buffers(indio_dev, buf_data1);
+			if (buf_data2)
+				iio_push_to_buffers(indio_dev, buf_data2);
+			iio_push_to_buffers(indio_dev, buf_ts);
+			mutex_unlock(&st->iio_buf_write_lock);
+			t_old = t_new;
+		}
+		st->sensor[ind].old_ts = t_old;
+	}
+
+	return t;
+}
 
 static int inv_push_marker_to_buffer(struct inv_mpu_state *st, u16 hdr)
 {
@@ -46,7 +141,9 @@ static int inv_push_marker_to_buffer(struct inv_mpu_state *st, u16 hdr)
 	u8 buf[IIO_BUFFER_BYTES];
 
 	memcpy(buf, &hdr, sizeof(hdr));
+	mutex_lock(&st->iio_buf_write_lock);
 	iio_push_to_buffers(indio_dev, buf);
+	mutex_unlock(&st->iio_buf_write_lock);
 
 	return 0;
 }
@@ -55,15 +152,32 @@ static int inv_push_8bytes_buffer(struct inv_mpu_state *st, u16 hdr,
 							u64 t, s16 *d)
 {
 	struct iio_dev *indio_dev = iio_priv_to_dev(st);
-	u8 buf[IIO_BUFFER_BYTES];
+	u8 buf_data1[IIO_BUFFER_BYTES];
+	u8 buf_ts[IIO_BUFFER_BYTES];
 	int i;
+	int ind = inv_parse_header(hdr);
 
-	memcpy(buf, &hdr, sizeof(hdr));
+	if (ind >= SENSOR_NUM_MAX) {
+		pr_err("invalid_header, ind=%d\n", ind);
+		return 0;
+	}
+
+	memcpy(buf_data1, &hdr, sizeof(hdr));
 	for (i = 0; i < 3; i++)
-		memcpy(&buf[2 + i * 2], &d[i], sizeof(d[i]));
-	iio_push_to_buffers(indio_dev, buf);
-	memcpy(buf, &t, sizeof(t));
-	iio_push_to_buffers(indio_dev, buf);
+		memcpy(&buf_data1[2 + i * 2], &d[i], sizeof(d[i]));
+
+	t = check_timestamp(st, hdr, buf_data1, NULL, t);
+
+	memcpy(buf_ts, &t, sizeof(t));
+
+	/* Raw data and timestamp need to be pushed together in iio buffer,
+	 * otherwise marker could be pushed in between raw data and timestamp which disturbs parsing at HAL
+	 */
+	mutex_lock(&st->iio_buf_write_lock);
+	iio_push_to_buffers(indio_dev, buf_data1);
+	iio_push_to_buffers(indio_dev, buf_ts);
+	mutex_unlock(&st->iio_buf_write_lock);
+	st->sensor[ind].old_ts = t;
 
 	return 0;
 }
@@ -72,17 +186,32 @@ static int inv_push_16bytes_buffer(struct inv_mpu_state *st, u16 hdr, u64 t,
 									int *q)
 {
 	struct iio_dev *indio_dev = iio_priv_to_dev(st);
-	u8 buf[IIO_BUFFER_BYTES];
+	u8 buf_data1[IIO_BUFFER_BYTES];
+	u8 buf_data2[IIO_BUFFER_BYTES];
+	u8 buf_ts[IIO_BUFFER_BYTES];
 	int i;
+	int ind = inv_parse_header(hdr);
 
-	memcpy(buf, &hdr, sizeof(hdr));
-	memcpy(buf + 4, &q[0], sizeof(q[0]));
-	iio_push_to_buffers(indio_dev, buf);
+	if (ind >= SENSOR_NUM_MAX) {
+		pr_err("invalid_header, ind=%d\n", ind);
+		return 0;
+	}
+
+	memcpy(buf_data1, &hdr, sizeof(hdr));
+	memcpy(buf_data1 + 4, &q[0], sizeof(q[0]));
 	for (i = 0; i < 2; i++)
-		memcpy(buf + 4 * i, &q[i + 1], sizeof(q[i]));
-	iio_push_to_buffers(indio_dev, buf);
-	memcpy(buf, &t, sizeof(t));
-	iio_push_to_buffers(indio_dev, buf);
+		memcpy(buf_data2 + 4 * i, &q[i + 1], sizeof(q[i]));
+
+	t = check_timestamp(st, hdr, buf_data1, buf_data2, t);
+
+	memcpy(buf_ts, &t, sizeof(t));
+
+	mutex_lock(&st->iio_buf_write_lock);
+	iio_push_to_buffers(indio_dev, buf_data1);
+	iio_push_to_buffers(indio_dev, buf_data2);
+	iio_push_to_buffers(indio_dev, buf_ts);
+	mutex_unlock(&st->iio_buf_write_lock);
+	st->sensor[ind].old_ts = t;
 
 	return 0;
 }
@@ -1584,6 +1713,7 @@ static int inv_process_batchmode(struct inv_mpu_state *st)
 	s16 sen[3];
 	u64 t;
 	bool done_flag;
+	u64 batch_irq_time;
 
 #if FEATURE_IKR_PANIC
 	if (HARDWARE_FIFO_SIZE <= st->fifo_count) {
@@ -1615,6 +1745,11 @@ static int inv_process_batchmode(struct inv_mpu_state *st)
 		dptr = d;
 	}
 	target_bytes = st->fifo_count;
+	batch_irq_time = get_time_ns();
+
+	if (st->batch.on)
+		get_sample_count_per_sensor(st, dptr, d, target_bytes);
+
 	while (target_bytes > 0) {
 		if (target_bytes < MAX_READ_SIZE)
 			tmp = target_bytes;
@@ -1660,8 +1795,22 @@ static int inv_process_batchmode(struct inv_mpu_state *st)
 		}
 		if (steps > 1)
 			inv_push_step_indicator(st, sensor_ind, steps);
-		st->sensor[sensor_ind].ts += (u64)st->sensor[sensor_ind].dur;
+		st->sensor[sensor_ind].ts = batch_irq_time;
 		t = st->sensor[sensor_ind].ts;
+
+		// Correct batch time stamp
+		if (st->batch.on) {
+			if (!st->sensor[sensor_ind].batch_irq_time)
+				st->sensor[sensor_ind].batch_irq_time = batch_irq_time;
+
+			if (st->sensor[sensor_ind].sample_count > 1)
+				t = st->sensor[sensor_ind].batch_irq_time - (st->sensor[sensor_ind].sample_count-1)*(NSEC_PER_SEC / st->sensor[sensor_ind].rate);
+			else
+				t = st->sensor[sensor_ind].batch_irq_time;
+
+			st->sensor[sensor_ind].sample_count--;
+		}
+
 		if (sensor_ind == SENSOR_COMPASS) {
 			if (!st->chip_config.normal_compass_measure) {
 				st->chip_config.normal_compass_measure = 1;
@@ -1788,7 +1937,9 @@ irqreturn_t inv_read_fifo(int irq, void *dev_id)
 			goto end_session;
 	}
 
-#define DMP_MIN_RUN_TIME (37 * NSEC_PER_MSEC)
+/* Set min dmp run time to 0,
+   so that data reporting is not skipped for 20 ms, 10 ms delay */
+#define DMP_MIN_RUN_TIME (0 * NSEC_PER_MSEC)
 	if (st->suspend_state)
 		return IRQ_HANDLED;
 	if (st->chip_config.dmp_on) {
@@ -1965,6 +2116,7 @@ void inv_init_sensor_struct(struct inv_mpu_state *st)
 			st->sensor[i].dur  = NSEC_PER_SEC /
 						INIT_DMP_OUTPUT_RATE;
 		}
+		st->sensor[i].old_ts = 0ULL;
 	}
 
 	st->sensor[SENSOR_ACCEL].send_data     = inv_send_accel_data;
