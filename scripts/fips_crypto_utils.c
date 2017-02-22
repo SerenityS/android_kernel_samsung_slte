@@ -13,7 +13,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+static int
+update_crypto_hmac (const char * vmlinux_path, const char * hmac_path, unsigned long offset);
+static int
+collect_crypto_bytes (const char * in_file, const char * section_name, unsigned long offset,
+                      unsigned long size, const char * out_file);
 
 int main (int argc, char **argv)
 {
@@ -107,7 +113,7 @@ int main (int argc, char **argv)
  *        -1, if error
  */
 
-int
+static int
 collect_crypto_bytes (const char * in_file, const char * section_name, unsigned long offset,
                       unsigned long size, const char * out_file)
 {
@@ -185,7 +191,7 @@ collect_crypto_bytes (const char * in_file, const char * section_name, unsigned 
  * Return 0, if Success
  *       -1, if Error
  */
-int
+static int
 update_crypto_hmac (const char * vmlinux_path, const char * hmac_path, unsigned long offset)
 {
 	FILE * vmlinux_fp = NULL;
