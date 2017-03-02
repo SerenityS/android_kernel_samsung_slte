@@ -1,15 +1,11 @@
 /*
- * Copyright (c) 2013 TRUSTONIC LIMITED
- * All Rights Reserved.
+ * MobiCore KernelApi module
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
+ * Copyright (c) 2013-2014 TRUSTONIC LIMITED
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/module.h>
 #include <linux/init.h>
@@ -172,6 +168,8 @@ static int __init mcapi_init(void)
 
 	if (!mod_ctx->sk) {
 		MCDRV_ERROR(mc_kapi, "register of receive handler failed");
+		kfree(mod_ctx);
+		mod_ctx = NULL;
 		return -EFAULT;
 	}
 
@@ -194,6 +192,6 @@ static void __exit mcapi_exit(void)
 module_init(mcapi_init);
 module_exit(mcapi_exit);
 
-MODULE_AUTHOR("Giesecke & Devrient GmbH");
+MODULE_AUTHOR("Trustonic Limited");
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("MobiCore API driver");

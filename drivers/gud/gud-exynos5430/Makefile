@@ -22,7 +22,7 @@ mcKernelApi-objs := MobiCoreKernelApi/main.o \
 obj-$(CONFIG_SECURE_OS_CONTROL) += sec-os-ctrl/
 
 # Release mode by default
-ccflags-y := -DNDEBUG
+ccflags-y := -DNDEBUG -include $(srctree)/$(GUD_ROOT_FOLDER)/build_tag.h
 ccflags-y += -Wno-declaration-after-statement
 
 ccflags-$(CONFIG_MOBICORE_DEBUG) += -DDEBUG
@@ -53,5 +53,3 @@ ccflags-y += -I$(GUD_ROOT_FOLDER)/MobiCoreDriver/public
 # MobiCore KernelApi required incldes
 ccflags-y += -I$(GUD_ROOT_FOLDER)/MobiCoreKernelApi/include \
 		-I$(GUD_ROOT_FOLDER)/MobiCoreKernelApi/public
-# build_tag.h is in gud folder
-ccflags-y += -I$(GUD_ROOT_FOLDER)
