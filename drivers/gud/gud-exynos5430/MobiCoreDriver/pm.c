@@ -1,17 +1,4 @@
 /*
- * Copyright (c) 2013 TRUSTONIC LIMITED
- * All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- */
-/*
  * MobiCore Driver Kernel Module.
  * This module is written as a Linux device driver.
  * This driver represents the command proxy on the lowest layer, from the
@@ -21,6 +8,13 @@
  * the interface from the secure world to the normal world.
  * The access to the driver is possible with a file descriptor,
  * which has to be created by the fd = open(/dev/mobicore) command.
+ *
+ * <-- Copyright Giesecke & Devrient GmbH 2009-2012 -->
+ * <-- Copyright Trustonic Limited 2013 -->
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/module.h>
 #include <linux/timer.h>
